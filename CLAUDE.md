@@ -164,8 +164,15 @@ List tab (look-alike of Jira's List view; web/list/tab.ts, logic.ts; src/routes/
   (Basic: Parent / Assignee / Status / Work type / Labels + "Add field", values from the loaded rows, client-side; JQL: server-side, combined with the pickers),
   Group (one field, searchable, "Clear selection"), "..." menu (Hide done work items = server `statusCategory != Done`, Show hierarchy = client, Export to Excel)
   and Configure columns (saved in localStorage "worklog-report:list-columns"; default Original Estimate / Time Spent / Status). No ticket checkboxes, no row menus.
-  POST /api/list { site?, projects[], assignees[], jql, hideDone, fields[] } -> { rows[{key,summary,type,subtask,status,statusCategory,parent?,values{}}], truncated, limit (1000), jql };
-  needs a project, user or JQL (400 otherwise). POST /api/list/export { site?, headers[], rows[{cells[],level,group}] } -> work-items_<site>_<date>.xlsx (no Jira calls).
+  POST /api/list { site?, from?, to?, projects[], assignees[], jql, hideDone, fields[] } -> { rows[{key,summary,type,subtask,status,statusCategory,parent?,values{}}], truncated, limit (1000), jql };
+  needs a project, user, JQL or date range (400 otherwise). From / To (date pickers, yyyy-MM-dd, inclusive, either may be empty; not saved in views) add
+  `worklogDate >= from AND worklogDate <= to` and default the order to `ORDER BY key ASC` (a typed ORDER BY wins). With a range and the Time Spent column
+  (`timespent`), its value is replaced by the time logged inside the range: worklogs of every listed issue are read (fetchAllWorklogs) and summed by `started`
+  date in REPORT_TZ (normalizeWorklogs); an unreadable worklog = 502, never a wrong number. Without a range it is Jira's all-time value. The Σ columns
+  (aggregate*) and Original Estimate are always Jira's own values (no date). Footer: "Total <column>: Nh" per time column = plain sum over every listed row
+  (web/list/logic.ts timeTotals; Σ columns are NOT de-duplicated across parent / child, so it equals adding up the column).
+  POST /api/list/export { site?, name?, headers[], totals?[], rows[{cells[],level,group}] } -> <name>_<date>.xlsx (name = the view's name with unsafe characters as "_",
+  else work-items_<site>); time columns (totals[i] not null) are written as numbers and a bold yellow Total row follows (same sums as the footer). No Jira calls.
 
 ## Phases (one at a time, stop after each for user check)
 1. Scaffold + config + jira client + health route + scripts/probe.ts

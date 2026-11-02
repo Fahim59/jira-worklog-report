@@ -332,7 +332,9 @@ describe('flat sheets', () => {
 });
 
 /** Minimal RFC 4180 reader for the fixture. */
-function parseCsv(text: string): string[][] {
+function parseCsv(raw: string): string[][] {
+  // A Windows checkout (core.autocrlf) turns the fixture's LF into CRLF, also inside quoted cells; the workbook has plain "\n".
+  const text = raw.replace(/\r\n/g, '\n');
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';

@@ -169,7 +169,7 @@ export interface ListResult {
 }
 
 export const postList = (
-  body: { site?: string; projects: string[]; assignees: string[]; jql: string; hideDone: boolean; fields: string[]; all?: boolean },
+  body: { site?: string; projects: string[]; assignees: string[]; jql: string; hideDone: boolean; from?: string; to?: string; fields: string[]; all?: boolean },
   signal?: AbortSignal,
 ) => request<ListResult>('/api/list', { ...json('POST', body), signal });
 
@@ -183,6 +183,8 @@ export async function postListExport(body: {
   /** File name stem (letters, digits, - and _). */
   name?: string;
   headers: string[];
+  /** Per column: the sum in hours for a time column (written as numbers + a Total row), else null. */
+  totals?: (number | null)[];
   rows: { cells: string[]; level: number; group: boolean }[];
 }): Promise<{ blob: Blob; filename: string }> {
   let res: Response;

@@ -860,6 +860,8 @@ button.cr-toggle { height: 22px; padding: 0; margin-right: 2px; color: var(--mut
 .ls-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; margin-bottom: 14px; }
 .ls-filters { padding: 0; border: 0; background: transparent; flex: 1 1 auto; }
 .ls-filters .field { min-width: 260px; flex: 1 1 260px; max-width: 420px; }
+.ls-filters .field.ls-date { min-width: 140px; flex: 0 1 150px; }
+.ls-date input[type='date'] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; }
 .ls-tools { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 .ls-tools button.active { border-color: #4c9aff; color: #4c9aff; }
 .ls-pop-wrap { position: relative; }

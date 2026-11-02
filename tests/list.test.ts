@@ -19,6 +19,7 @@ import {
   pageLines,
   parentKeys,
   requestFields,
+  timeTotals,
   valuesOf,
   type ListRowData,
 } from '../web/list/logic.js';
@@ -139,6 +140,21 @@ describe('pageLines', () => {
   });
 });
 
+describe('timeTotals', () => {
+  const rows = [
+    row('A-1', { values: { timespent: '5400', aggregatetimespent: '9000', aggregatetimeoriginalestimate: '14400', labels: 'x' } }),
+    row('A-2', { parent: 'A-1', values: { timespent: '3600', aggregatetimespent: '3600', aggregatetimeoriginalestimate: '' } }),
+    row('A-3', { values: { timespent: '', aggregatetimespent: 'oops' } }),
+  ];
+  it('is the plain column sum in hours over every row, parents and children alike (matches adding up the column)', () => {
+    expect(timeTotals(rows, ['timespent', 'aggregatetimespent', 'aggregatetimeoriginalestimate'])).toEqual([2.5, 3.5, 4]);
+  });
+  it('is null for columns that are not times; blank, missing and non-numeric values count as nothing', () => {
+    expect(timeTotals(rows, ['issue.key', 'labels', 'timeoriginalestimate', 'timespent'])).toEqual([null, null, 0, 2.5]);
+    expect(timeTotals([], ['timespent'])).toEqual([0]);
+  });
+});
+
 describe('moveColumn', () => {
   it('moves one column to a place; clamps; no-op for a bad index', () => {
     const cols = ['a', 'b', 'status', 'd'];
@@ -165,15 +181,39 @@ describe('list JQL', () => {
     expect(listJql({ projects: [], assignees: [], jql: '', hideDone: true })).toBeUndefined();
     expect(listJql({ projects: [], assignees: [], jql: 'ORDER BY key', hideDone: false })).toBeUndefined();
   });
+  it('a date range filters on worklog date (inclusive) and orders by key unless the JQL says otherwise', () => {
+    const none = { projects: [], assignees: [], jql: '', hideDone: false };
+    expect(listJql({ ...none, from: '2026-10-01', to: '2026-10-31' })).toBe('worklogDate >= "2026-10-01" AND worklogDate <= "2026-10-31" ORDER BY key ASC');
+    expect(listJql({ ...none, from: '2026-10-01' })).toBe('worklogDate >= "2026-10-01" ORDER BY key ASC');
+    expect(listJql({ ...none, to: '2026-10-31' })).toBe('worklogDate <= "2026-10-31" ORDER BY key ASC');
+    expect(listJql({ ...none, projects: ['FFN'], from: '2026-10-01', jql: 'ORDER BY created DESC' })).toBe(
+      'worklogDate >= "2026-10-01" AND project in ("FFN") ORDER BY created DESC',
+    );
+  });
 });
 
 describe('routes', () => {
-  function fakeJira() {
+  // started (UTC) → date in Asia/Dhaka (+6) / America/New_York (-4 in Oct): 2026-09-30T20:00Z = Oct 1 02:00 Dhaka / Sep 30 16:00 NY
+  const WORKLOGS: Record<string, { id: string; started: string; timeSpentSeconds: number }[]> = {
+    'FFN-1': [
+      { id: '1', started: '2026-09-30T20:00:00.000+0000', timeSpentSeconds: 3600 }, // Dhaka: in range · NY: out
+      { id: '2', started: '2026-10-10T08:00:00.000+0000', timeSpentSeconds: 1800 }, // in range
+      { id: '3', started: '2026-10-31T20:00:00.000+0000', timeSpentSeconds: 7200 }, // Dhaka: Nov 1, out · NY: Oct 31, in
+    ],
+    'FFN-2': [],
+  };
+  function fakeJira(opts: { failWorklogOf?: string } = {}) {
     const calls: { path: string; query?: Record<string, QueryValue> }[] = [];
     const client: JiraClient = {
       baseUrl: 'https://one.atlassian.net',
       async get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
         calls.push({ path, query });
+        const wl = /^\/rest\/api\/3\/issue\/([^/]+)\/worklog$/.exec(path);
+        if (wl) {
+          if (wl[1] === opts.failWorklogOf) throw Object.assign(new Error('boom'), { status: 400 });
+          const worklogs = WORKLOGS[wl[1]!] ?? [];
+          return { startAt: 0, maxResults: 1000, total: worklogs.length, worklogs } as T;
+        }
         if (path === '/rest/api/3/field') {
           return [
             { id: 'summary', name: 'Summary', schema: { type: 'string' } },
@@ -201,10 +241,14 @@ describe('routes', () => {
     } as JiraClient;
     return { client, calls };
   }
-  async function app() {
-    const jira = fakeJira();
+  async function app(opts: { zone?: string; failWorklogOf?: string } = {}) {
+    const jira = fakeJira(opts);
     const a = Fastify();
-    await a.register(listRoutes, { sites: new SiteRegistry([{ key: 'one', url: 'https://one.atlassian.net', jira: jira.client }]), fields: new FieldCache() });
+    await a.register(listRoutes, {
+      sites: new SiteRegistry([{ key: 'one', url: 'https://one.atlassian.net', jira: jira.client }]),
+      fields: new FieldCache(),
+      ...(opts.zone ? { cfg: { REPORT_TZ: opts.zone, JIRA_CONCURRENCY: 2 } } : {}),
+    });
     return { a, jira };
   }
 
@@ -261,6 +305,46 @@ describe('routes', () => {
     expect((await post({ projects: ['F F'] })).statusCode).toBe(400);
     expect((await a.inject({ method: 'POST', url: '/api/list?site=zzz', payload: { projects: ['FFN'] } })).statusCode).toBe(400);
   });
+  it('with a date range, JQL uses worklogDate and Time Spent is the time logged inside the range (REPORT_TZ)', async () => {
+    const { a, jira } = await app({ zone: 'Asia/Dhaka' });
+    const res = await a.inject({ method: 'POST', url: '/api/list', payload: { from: '2026-10-01', to: '2026-10-31', fields: ['timespent'] } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.jql).toBe('worklogDate >= "2026-10-01" AND worklogDate <= "2026-10-31" ORDER BY key ASC');
+    // Jira's own all-time timespent (7200) is replaced: 3600 (Oct 1 in Dhaka) + 1800; the Nov 1 (Dhaka) log is out. No worklogs in range → blank.
+    expect(body.rows.map((r: { key: string; values: { timespent: string } }) => [r.key, r.values.timespent])).toEqual([
+      ['FFN-1', '5400'],
+      ['FFN-2', ''],
+    ]);
+    expect(jira.calls.filter((c) => c.path.endsWith('/worklog')).map((c) => c.path).sort()).toEqual(['/rest/api/3/issue/FFN-1/worklog', '/rest/api/3/issue/FFN-2/worklog']);
+    // the worklog window always covers the range (with a day of slack each side)
+    const q = jira.calls.find((c) => c.path.endsWith('/worklog'))!.query!;
+    expect(Number(q.startedAfter)).toBeLessThan(Date.parse('2026-09-30T18:00:00Z') + 1);
+    expect(Number(q.startedBefore)).toBeGreaterThan(Date.parse('2026-10-31T18:00:00Z'));
+  });
+  it('the day boundary follows REPORT_TZ', async () => {
+    const { a } = await app({ zone: 'America/New_York' });
+    const res = await a.inject({ method: 'POST', url: '/api/list', payload: { from: '2026-10-01', to: '2026-10-31', fields: ['timespent'] } });
+    // NY: Sep 30 16:00 is out; Oct 31 16:00 is in → 1800 + 7200
+    expect(res.json().rows[0].values.timespent).toBe('9000');
+  });
+  it('without a date range, or without the Time Spent column, no worklogs are read and Jira\'s own value stays', async () => {
+    const { a, jira } = await app({ zone: 'Asia/Dhaka' });
+    const plain = await a.inject({ method: 'POST', url: '/api/list', payload: { projects: ['FFN'], fields: ['timespent'] } });
+    expect(plain.json().rows[0].values.timespent).toBe('7200');
+    const noCol = await a.inject({ method: 'POST', url: '/api/list', payload: { from: '2026-10-01', to: '2026-10-31', fields: ['labels'] } });
+    expect(noCol.statusCode).toBe(200);
+    expect(jira.calls.some((c) => c.path.endsWith('/worklog'))).toBe(false);
+  });
+  it('a worklog that cannot be read fails the request instead of showing a wrong Time Spent; bad dates are 400', async () => {
+    const { a } = await app({ zone: 'Asia/Dhaka', failWorklogOf: 'FFN-2' });
+    const res = await a.inject({ method: 'POST', url: '/api/list', payload: { from: '2026-10-01', to: '2026-10-31', fields: ['timespent'] } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/FFN-2/);
+    const post = (payload: Record<string, unknown>) => a.inject({ method: 'POST', url: '/api/list', payload });
+    expect((await post({ from: '10/01/2026', fields: [] })).statusCode).toBe(400);
+    expect((await post({ to: '2026-13-45x', fields: [] })).statusCode).toBe(400);
+  });
   it('exports the table as an .xlsx with indent and group rows', async () => {
     const { a } = await app();
     const res = await a.inject({
@@ -286,5 +370,37 @@ describe('routes', () => {
     expect(ws.getCell('A4').alignment?.indent).toBe(1);
     expect(ws.getCell('B4').value).toBe('To Do');
     expect((await a.inject({ method: 'POST', url: '/api/list/export', payload: { headers: [], rows: [] } })).statusCode).toBe(400);
+    expect(ws.rowCount).toBe(4); // no totals sent → no Total row
+  });
+  it('time columns are written as numbers, followed by a bold Total row; the file is named after the view', async () => {
+    const { a } = await app();
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/list/export',
+      payload: {
+        name: 'Issue_List',
+        headers: ['Issue key', 'Σ Time Spent', 'Time Spent'],
+        totals: [null, 940.5, 473],
+        rows: [
+          { cells: ['FFN-1', '6', '2.5'], level: 0, group: false },
+          { cells: ['FFN-2', '', '1'], level: 1, group: false },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-disposition']).toMatch(/Issue_List_\d{4}-\d{2}-\d{2}\.xlsx/);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.rawPayload as unknown as ArrayBuffer);
+    const ws = wb.getWorksheet('Work items')!;
+    expect([ws.getCell('B2').value, ws.getCell('C2').value, ws.getCell('B3').value, ws.getCell('C3').value]).toEqual([6, 2.5, '', 1]);
+    expect(ws.getCell('A2').value).toBe('FFN-1'); // text column stays text
+    expect(ws.rowCount).toBe(4);
+    expect([ws.getCell('A4').value, ws.getCell('B4').value, ws.getCell('C4').value]).toEqual(['Total', 940.5, 473]);
+    expect(ws.getRow(4).font?.bold).toBe(true);
+    // a table without time columns gets no Total row
+    const plain = await a.inject({ method: 'POST', url: '/api/list/export', payload: { headers: ['Key'], totals: [null], rows: [{ cells: ['A-1'], level: 0, group: false }] } });
+    const wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.load(plain.rawPayload as unknown as ArrayBuffer);
+    expect(wb2.getWorksheet('Work items')!.rowCount).toBe(2);
   });
 });

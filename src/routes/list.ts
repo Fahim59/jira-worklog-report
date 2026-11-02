@@ -8,6 +8,8 @@ import type { SiteRegistry } from '../jira/sites.js';
 import { contentDisposition } from '../services/custom/export.js';
 import { normalizeFieldValue } from '../services/custom/fields.js';
 import { jqlString } from '../services/custom/filter.js';
+import { normalizeWorklogs } from '../services/normalize.js';
+import { fetchAllWorklogs, startedWindow } from '../jira/worklogs.js';
 import { errorResponse, zodMessage } from './runs.js';
 import { requireSite, siteQuery } from './site.js';
 
@@ -33,6 +35,9 @@ const ListBody = z.object({
   /** Optional JQL (conditions, with an optional ORDER BY at the end). */
   jql: z.string().max(2000).default(''),
   hideDone: z.boolean().default(false),
+  /** Optional date range (yyyy-MM-dd, inclusive): work items with a worklog dated in it. */
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid from date').optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid to date').optional(),
   /** Read every match (up to EXPORT_LIMIT) instead of the first LIST_LIMIT: for the Excel export. */
   all: z.boolean().default(false),
   /** Jira field ids to return values for (the table's columns, the group field, filter fields). */
@@ -47,16 +52,18 @@ export function splitOrderBy(jql: string): { conditions: string; order: string }
 }
 
 /** The JQL for one list request, or undefined when nothing narrows it (Jira refuses unbounded searches). */
-export function listJql(b: { projects: string[]; assignees: string[]; jql: string; hideDone: boolean }): string | undefined {
+export function listJql(b: { projects: string[]; assignees: string[]; jql: string; hideDone: boolean; from?: string; to?: string }): string | undefined {
   const { conditions, order } = splitOrderBy(b.jql);
   const parts = [
+    b.from ? `worklogDate >= "${b.from}"` : '',
+    b.to ? `worklogDate <= "${b.to}"` : '',
     b.projects.length ? `project in (${b.projects.map(jqlString).join(', ')})` : '',
     b.assignees.length ? `assignee in (${b.assignees.map(jqlString).join(', ')})` : '',
     conditions ? `(${conditions})` : '',
   ].filter(Boolean);
   if (parts.length === 0) return undefined;
   if (b.hideDone) parts.push('statusCategory != Done');
-  return `${parts.join(' AND ')} ${order || 'ORDER BY created DESC'}`;
+  return `${parts.join(' AND ')} ${order || (b.from || b.to ? 'ORDER BY key ASC' : 'ORDER BY created DESC')}`;
 }
 
 interface RawIssue {
@@ -73,6 +80,8 @@ const ExportBody = z.object({
   /** File name stem (default "work-items_<site>"). */
   name: z.string().regex(/^[A-Za-z0-9_-]{1,60}$/, 'invalid name').optional(),
   headers: z.array(z.string().max(200)).min(1).max(MAX_EXPORT_COLS),
+  /** Per column: the sum (hours) of a time column, else null. Those columns are written as numbers and get a Total row. */
+  totals: z.array(z.number().finite().nullable()).max(MAX_EXPORT_COLS).optional(),
   rows: z
     .array(
       z.object({
@@ -86,8 +95,13 @@ const ExportBody = z.object({
     .max(MAX_ROWS),
 });
 
-export async function listRoutes(app: FastifyInstance, opts: { sites: SiteRegistry; fields: FieldCache }): Promise<void> {
+export async function listRoutes(
+  app: FastifyInstance,
+  opts: { sites: SiteRegistry; fields: FieldCache; cfg?: { REPORT_TZ: string; JIRA_CONCURRENCY: number } },
+): Promise<void> {
   const { sites, fields } = opts;
+  const zone = opts.cfg?.REPORT_TZ ?? 'Asia/Dhaka';
+  const concurrency = opts.cfg?.JIRA_CONCURRENCY ?? 5;
 
   // Work items of a Jira List view: one row per issue with the requested field values, parent key for the hierarchy.
   app.post('/api/list', async (req, reply) => {
@@ -134,6 +148,18 @@ export async function listRoutes(app: FastifyInstance, opts: { sites: SiteRegist
           values,
         };
       });
+      // With a date range, "Time Spent" is the time logged inside it (worklog `started` date in REPORT_TZ), not Jira's all-time total.
+      if ((body.from || body.to) && body.fields.includes('timespent')) {
+        const from = body.from ?? '1970-01-01';
+        const to = body.to ?? '2100-12-31';
+        const fetched = await fetchAllWorklogs(site.jira, rows.map((r) => ({ key: r.key, summary: r.summary, projectKey: r.key.split('-')[0] ?? '', projectName: '' })), startedWindow(from, to, zone), { concurrency });
+        if (fetched.failedIssueKeys.length) {
+          return reply.code(502).send({ error: `Could not read the worklogs of ${fetched.failedIssueKeys.slice(0, 5).join(', ')}${fetched.failedIssueKeys.length > 5 ? '…' : ''}; Time Spent would be wrong. Try again.` });
+        }
+        const sums = new Map<string, number>();
+        for (const w of normalizeWorklogs(fetched.issues, { from, to, zone }).worklogs) sums.set(w.issueKey, (sums.get(w.issueKey) ?? 0) + w.seconds);
+        for (const r of rows) r.values.timespent = sums.has(r.key) ? String(sums.get(r.key)) : '';
+      }
       return { site: site.key, jql, rows, truncated, limit, retrievedAt: new Date().toISOString() };
     } catch (err) {
       req.log.warn({ site: site.key, err: (err as Error).message }, 'list failed');
@@ -171,7 +197,8 @@ export async function listRoutes(app: FastifyInstance, opts: { sites: SiteRegist
   app.post('/api/list/export', { bodyLimit: 16 * 1024 * 1024 }, async (req, reply) => {
     const parsed = ExportBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: `Invalid table: ${zodMessage(parsed.error.issues.slice(0, 5))}` });
-    const { headers, rows } = parsed.data;
+    const { headers, rows, totals } = parsed.data;
+    const numeric = headers.map((_, i) => totals?.[i] != null);
     const site = sites.resolve(parsed.data.site);
     if (!site) return reply.code(400).send({ error: `Invalid table: ${sites.unknownSiteMessage(parsed.data.site)}` });
 
@@ -190,10 +217,22 @@ export async function listRoutes(app: FastifyInstance, opts: { sites: SiteRegist
         ws.mergeCells(row.number, 1, row.number, headers.length);
         continue;
       }
-      const row = ws.addRow(headers.map((_, i) => r.cells[i] ?? ''));
+      const row = ws.addRow(
+        headers.map((_, i) => {
+          const v = r.cells[i] ?? '';
+          return numeric[i] && v !== '' && Number.isFinite(Number(v)) ? Number(v) : v;
+        }),
+      );
       if (r.level) row.getCell(1).alignment = { indent: r.level };
       r.cells.forEach((v, i) => {
         if (i < widths.length) widths[i] = Math.min(60, Math.max(widths[i]!, v.length + 2 + (i === 0 ? r.level * 2 : 0)));
+      });
+    }
+    if (totals && numeric.some(Boolean)) {
+      const t = ws.addRow(headers.map((_, i) => (numeric[i] ? totals[i] : i === 0 ? 'Total' : '')));
+      t.font = { bold: true };
+      t.eachCell({ includeEmpty: true }, (c) => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF0B3' } };
       });
     }
     widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));

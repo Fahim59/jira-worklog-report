@@ -58,6 +58,19 @@ export function formatHours(seconds: number): string {
   return String(Math.round((seconds / 3600) * 100) / 100);
 }
 
+/** Per column: the plain sum in hours of a time column over every given row (same as adding up the column), else null. */
+export function timeTotals(rows: ListRowData[], columns: string[]): (number | null)[] {
+  return columns.map((c): number | null => {
+    if (!DURATION_FIELDS.has(c)) return null;
+    let secs = 0;
+    for (const r of rows) {
+      const n = Number(r.values[c]);
+      if (r.values[c] !== undefined && r.values[c] !== '' && Number.isFinite(n)) secs += n;
+    }
+    return Math.round((secs / 3600) * 100) / 100;
+  });
+}
+
 /** The text of one cell, durations written as hours. */
 export function cellText(row: ListRowData, fieldId: string): string {
   const raw = BUILTIN_VALUE[fieldId]?.(row) ?? row.values[fieldId] ?? '';

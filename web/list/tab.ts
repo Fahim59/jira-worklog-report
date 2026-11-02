@@ -33,6 +33,7 @@ import {
   pageLines,
   parentKeys,
   requestFields,
+  timeTotals,
   type BasicFilter,
   type ListRowData,
 } from './logic.js';
@@ -169,7 +170,11 @@ export function setupList(deps: ListTabDeps): ListTab {
   let loadedFields = '';
   let abort: AbortController | undefined;
   /** What the shown result was asked with: the Excel export asks again for every match. */
-  let lastRequest: { projects: string[]; assignees: string[]; jql: string; hideDone: boolean; fields: string[] } | undefined;
+  let lastRequest: { projects: string[]; assignees: string[]; jql: string; hideDone: boolean; from?: string; to?: string; fields: string[] } | undefined;
+  const fromInput = $<HTMLInputElement>('ls-from');
+  const toInput = $<HTMLInputElement>('ls-to');
+  fromInput.addEventListener('change', () => scheduleLoad());
+  toInput.addEventListener('change', () => scheduleLoad());
   let reloadTimer: number | undefined;
   let busy = false;
   let exporting = false;
@@ -815,7 +820,15 @@ export function setupList(deps: ListTabDeps): ListTab {
     if (fields.length === 0) return;
     const projects = projectPicker.values;
     const assignees = userPicker.values;
-    if (projects.length === 0 && assignees.length === 0 && jql.trim() === '') {
+    const from = fromInput.value || undefined;
+    const to = toInput.value || undefined;
+    if (from && to && from > to) {
+      result = undefined;
+      showMsg(formError, '"From" must be on or before "To".');
+      render();
+      return;
+    }
+    if (projects.length === 0 && assignees.length === 0 && jql.trim() === '' && !from && !to) {
       result = undefined;
       render();
       return;
@@ -828,10 +841,10 @@ export function setupList(deps: ListTabDeps): ListTab {
     setSiteLock(deps.siteSelect, 'list', true);
     showMsg(formError, undefined);
     try {
-      const res = await postList({ site: deps.site(), projects, assignees, jql, hideDone, fields: fieldIds }, ctl.signal);
+      const res = await postList({ site: deps.site(), projects, assignees, jql, hideDone, from, to, fields: fieldIds }, ctl.signal);
       if (ctl.signal.aborted || seq !== loadSeq) return;
       result = res;
-      lastRequest = { projects, assignees, jql, hideDone, fields: fieldIds };
+      lastRequest = { projects, assignees, jql, hideDone, from, to, fields: fieldIds };
       loadedFields = [...fieldIds].sort().join(',');
       expanded = new Set(expanded); // keep what the user opened
       showMsg(formInfo, undefined);
@@ -1013,7 +1026,10 @@ export function setupList(deps: ListTabDeps): ListTab {
 
     footer.hidden = false;
     const count = `${rows.length}${rows.length === result.rows.length ? '' : ` of ${result.rows.length}`} work item${result.rows.length === 1 ? '' : 's'}${result.truncated ? ` (first ${result.limit}; the Excel export has all)` : ''}`;
-    footer.replaceChildren(document.createTextNode(page.items > page.shown ? `Showing ${page.shown} of ${page.items} · ${count}` : count));
+    const colIds = columns.filter((c) => fieldById.has(c));
+    const sums = timeTotals(rows, colIds);
+    const totalText = colIds.flatMap((c, i) => (sums[i] == null ? [] : [`Total ${headerName(c)}: ${sums[i]}h`])).join(' · ');
+    footer.replaceChildren(document.createTextNode([page.items > page.shown ? `Showing ${page.shown} of ${page.items} · ${count}` : count, totalText].filter(Boolean).join(' · ')));
     if (page.items > page.shown) {
       // Also here, under the table, where it is always on screen.
       const more = el('button', 'ls-more', `Load more (${Math.min(PAGE_SIZE, page.items - page.shown)} of ${page.items - page.shown} left)`);
@@ -1053,9 +1069,15 @@ export function setupList(deps: ListTabDeps): ListTab {
         expanded: new Set(parentKeys(rows, hierarchy)),
         collapsedGroups: new Set(),
       });
+      // File name = the view's name (the server only allows letters, digits, - and _).
+      const viewName = (currentView ?? '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+      // Total row: each time column summed in hours over every listed row (same as the footer).
+      const totals = timeTotals(rows, cols);
       const file = await postListExport({
         site: deps.site(),
+        ...(viewName ? { name: viewName } : {}),
         headers: cols.map(headerName),
+        totals,
         rows: lines.map((l) =>
           l.kind === 'group'
             ? { cells: [`${l.label} (${l.count})`], level: 0, group: true }
@@ -1081,6 +1103,8 @@ export function setupList(deps: ListTabDeps): ListTab {
     basic = {};
     extraFilterFields = [];
     jql = '';
+    fromInput.value = '';
+    toInput.value = '';
     expanded = new Set();
     collapsedGroups = new Set();
     filterField = undefined;

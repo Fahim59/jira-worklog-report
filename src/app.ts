@@ -56,7 +56,7 @@ export async function buildServer(cfg: Config, opts: { sites?: SiteEntry[]; logg
   await app.register(customReportRoutes, { sites, fields, cfg, runs });
   await app.register(customExportRoutes, { sites, cfg });
   await app.register(teamExportRoutes, { sites });
-  await app.register(listRoutes, { sites, fields });
+  await app.register(listRoutes, { sites, fields, cfg });
   const store = new FileTemplateStore(resolve(cfg.TEMPLATES_FILE), { onWarn: (msg) => app.log.warn(msg) });
   await app.register(templateRoutes, { sites, fields, store });
   await app.register(settingsRoutes, { store });
