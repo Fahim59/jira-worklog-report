@@ -1,7 +1,7 @@
 // Custom Report engine: issue hierarchy (epic, sub-task rollup), field values, in-code conditions, tree builder.
 // Pure: no Node/Fastify imports (luxon is plain JS).
 import { DateTime } from 'luxon';
-import { normalizeFieldValue } from './fields.js';
+import { normalizeFieldValue, secondsToHoursText, TIME_TRACKING_FIELDS } from './fields.js';
 import { matchesCondition, type Condition } from './filter.js';
 import type { Layout, Period } from './layout.js';
 import { applyExtract } from './text.js';
@@ -284,6 +284,7 @@ export class ValueResolver {
         return same(str(obj(issue.fields?.assignee)?.accountId));
     }
     const raw = issue.fields?.[fieldId];
+    if (TIME_TRACKING_FIELDS.has(fieldId)) return same(secondsToHoursText(raw));
     const type = this.schemaTypes.get(fieldId) ?? 'any';
     const user = obj(raw);
     if (type === 'user' && typeof user?.accountId === 'string') {

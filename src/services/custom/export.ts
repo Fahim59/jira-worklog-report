@@ -222,7 +222,10 @@ export function templateSheet(report: WorkbookReport, result: SheetResult, label
 
   const amounts = new Set(table.amountColumns);
   const dates = new Set(table.dateColumns);
+  const hours = new Set(table.hourColumns);
   const cell = (v: string | number, col: number): CellValue => {
+    // Time-tracking fields arrive as hours text: write real numbers so Excel can sum them. "" and "(multiple)" stay text.
+    if (hours.has(col) && typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
     if (amounts.has(col) && typeof v === 'number') return exportAmount(v, sheet.format, report.hoursPerDay);
     if (dates.has(col) && typeof v === 'string') return excelDateTime(v, report.timeZone);
     return v;

@@ -289,3 +289,39 @@ describe('units', () => {
     expect(formatAmount(16 * H, 'days', 8)).toBe('2d');
   });
 });
+
+describe('time-tracking fields are shown in hours', () => {
+  const T = issue('FFN-50', {
+    summary: 'Timed',
+    timespent: 59400, // 16.5 h
+    aggregatetimespent: 61200, // 17 h
+    timeoriginalestimate: 32400, // 9 h
+    aggregatetimeoriginalestimate: 36000,
+    timeestimate: 1200, // 20 min
+    aggregatetimeestimate: 0,
+    customfield_points: 5, // a number that is NOT time
+  });
+  const r = new ValueResolver(issueMap([T, issue('FFN-51', { summary: 'No time', timespent: null })]), new Map([['customfield_points', 'number']]));
+
+  it('converts all six fields from seconds to hours', () => {
+    expect(r.issueValue('timespent', 'FFN-50').label).toBe('16.5');
+    expect(r.issueValue('aggregatetimespent', 'FFN-50').label).toBe('17');
+    expect(r.issueValue('timeoriginalestimate', 'FFN-50').label).toBe('9');
+    expect(r.issueValue('aggregatetimeoriginalestimate', 'FFN-50').label).toBe('10');
+    expect(r.issueValue('timeestimate', 'FFN-50').label).toBe('0.333333');
+    expect(r.issueValue('aggregatetimeestimate', 'FFN-50').label).toBe('0');
+  });
+
+  it('value and label agree, so grouping by the field works', () => {
+    expect(r.issueValue('timespent', 'FFN-50')).toEqual({ value: '16.5', label: '16.5' });
+  });
+
+  it('an empty field stays empty (not 0)', () => {
+    expect(r.issueValue('timespent', 'FFN-51').label).toBe('');
+    expect(r.issueValue('timeoriginalestimate', 'FFN-51').label).toBe('');
+  });
+
+  it('does not touch other numeric fields', () => {
+    expect(r.issueValue('customfield_points', 'FFN-50').label).toBe('5');
+  });
+});

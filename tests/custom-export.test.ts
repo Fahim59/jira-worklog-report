@@ -565,3 +565,39 @@ describe('starter presets', () => {
     expect(warnings).toEqual(['Team Client Report / Report: field "Client Reference" not found on this site; the column is skipped.']);
   });
 });
+
+describe('time-tracking columns are exported as numbers (hours)', () => {
+  const TIMED: CustomIssue[] = [
+    { key: 'FFN-1', fields: { summary: 'Login', status: { name: 'Done' }, aggregatetimespent: 59400, timeoriginalestimate: 32400, timespent: 1200 } },
+    { key: 'FFN-2', fields: { summary: 'Logout', status: { name: 'QA' }, aggregatetimespent: 7200, timeoriginalestimate: null } },
+    { key: 'FFN-3', fields: { summary: 'Search', status: { name: 'Done' }, aggregatetimespent: 3600, timeoriginalestimate: 0 } },
+  ];
+  const cols = ['aggregatetimespent', 'timeoriginalestimate'];
+
+  it('group sheet: numbers, blanks stay empty, month total stays hours', () => {
+    const r = report([group(['issue.key'], { columns: cols, totalColumns: 'lastLevel' })], {}, { issues: TIMED });
+    const rows = tableOf(layoutOf(r).rows);
+    expect(rows[0]).toHaveLength(4);
+    const byKey = Object.fromEntries(rows.slice(1, 4).map((x) => [x[0], x]));
+    expect(byKey['FFN-1']).toEqual(['FFN-1', 16.5, 9, 6.5]);
+    expect(byKey['FFN-2']).toEqual(['FFN-2', 2, '', 1]);
+    expect(byKey['FFN-3']).toEqual(['FFN-3', 1, 0, 0.5]);
+  });
+
+  it('each-issue sheet: numbers too, and the written xlsx cell is numeric', async () => {
+    const r = report([{ name: 'Issues', rows: { mode: 'eachIssue' }, columns: ['issue.key', 'timespent'] }], {}, { issues: TIMED });
+    const rows = tableOf(layoutOf(r).rows);
+    expect(rows.find((x) => x[0] === 'FFN-1')![1]).toBe(0.333333);
+    const back = await roundTrip(buildTemplateWorkbook(r));
+    const ws = back.getWorksheet('Issues')!;
+    const rowOf = (key: string) => {
+      let hit = 0;
+      ws.eachRow((row, i) => {
+        if (row.getCell(1).value === key) hit = i;
+      });
+      return ws.getRow(hit);
+    };
+    expect(rowOf('FFN-1').getCell(2).value).toBe(0.333333);
+    expect(rowOf('FFN-2').getCell(2).value ?? '').toBe(''); // empty stays empty, not 0
+  });
+});

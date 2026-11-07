@@ -111,6 +111,26 @@ export function adfToText(doc: unknown): string {
   return adfNode(doc).replace(/\n{2,}/g, '\n').trim();
 }
 
+/** Jira time-tracking fields: the API sends them as whole seconds. They are shown in hours. */
+export const TIME_TRACKING_FIELDS: ReadonlySet<string> = new Set([
+  'timespent',
+  'timeoriginalestimate',
+  'timeestimate',
+  'aggregatetimespent',
+  'aggregatetimeoriginalestimate',
+  'aggregatetimeestimate',
+]);
+
+/**
+ * Seconds → hours as text, never rounded to a "nice" value: 1 s = 0.000278 h, so six decimals keep every whole
+ * second to within 0.0000005 h (16.5 h stays "16.5", 20 min is "0.333333"). Anything that is not a finite,
+ * non-negative number (empty field, text) gives "" rather than a made-up 0.
+ */
+export function secondsToHoursText(raw: unknown): string {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return '';
+  return String(Number((raw / 3600).toFixed(6)));
+}
+
 /** Display string for any Jira field value (see the Custom Report spec, Step 1). */
 export function normalizeFieldValue(raw: unknown, schemaType = 'any'): string {
   if (raw === null || raw === undefined) return '';

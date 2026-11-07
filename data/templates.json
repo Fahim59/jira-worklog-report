@@ -1,7 +1,7 @@
 {
   "version": 2,
   "defaults": {
-    "masdirect": "38bddd51-780e-4cc1-83cd-d81f4da39de3"
+    "masdirect": "219fdbb5-d5bb-4758-a63f-fa069b0f34f1"
   },
   "settings": {
     "worklog-report:list-columns-2": "[\"issue.key\",\"summary\",\"status\",\"aggregatetimespent\",\"aggregatetimeoriginalestimate\",\"timespent\"]",
@@ -200,6 +200,65 @@
       "id": "b212d4f1-bd5f-4410-b691-3da4c4b29005",
       "site": "pm23",
       "updatedAt": "2026-10-21T17:48:04.180Z"
+    },
+    {
+      "name": "Invoice Report",
+      "defaults": {
+        "projects": [
+          "FFN"
+        ],
+        "authors": []
+      },
+      "sheets": [
+        {
+          "name": "Report",
+          "rows": {
+            "mode": "group",
+            "groupBy": [
+              {
+                "fieldId": "issue.key",
+                "label": "Card Number"
+              },
+              {
+                "fieldId": "summary",
+                "label": "Summary"
+              },
+              {
+                "fieldId": "status",
+                "label": "Status"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "fieldId": "aggregatetimespent",
+              "label": "Total time spent"
+            },
+            {
+              "fieldId": "timeoriginalestimate",
+              "label": "Original estimate"
+            }
+          ],
+          "totals": true,
+          "period": "none",
+          "format": "hours",
+          "sumSubtasksToParent": false,
+          "sort": "value",
+          "filter": {
+            "conditions": []
+          },
+          "totalColumns": "lastLevel",
+          "totalLabel": "Time spent (whole month)",
+          "subtotalRows": false,
+          "includeIssuesWithoutWorklogs": false,
+          "mergeGroupCells": false,
+          "headerStyle": "standard",
+          "notes": []
+        }
+      ],
+      "id": "219fdbb5-d5bb-4758-a63f-fa069b0f34f1",
+      "site": "masdirect",
+      "updatedAt": "2026-11-07T17:59:37.723Z"
     }
   ]
 }

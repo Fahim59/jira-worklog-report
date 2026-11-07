@@ -1,6 +1,7 @@
 // Sheet results as plain tables (header + rows), the shape the Excel writer (and the preview) lays out.
 // Amount cells are seconds; the caller converts them to the sheet's unit. Pure: no imports beyond types.
 import type { TreeNode } from './engine.js';
+import { TIME_TRACKING_FIELDS } from './fields.js';
 import type { Period } from './layout.js';
 import type { FlatSheetResult, GroupSheetResult, SheetResult } from './sheets.js';
 
@@ -54,6 +55,8 @@ export interface SheetTable {
   dateColumns: number[];
   /** 0-based columns holding counts (plain numbers). */
   countColumns: number[];
+  /** 0-based columns holding Jira time-tracking fields, already in hours as text; the Excel export writes them as numbers. */
+  hourColumns: number[];
   /** mergeGroupCells: [firstRow, col, lastRow, col], 0-based into `rows` / columns; vertical, top-aligned. */
   merges: Array<[number, number, number, number]>;
 }
@@ -124,6 +127,7 @@ export function groupTable(r: Pick<GroupSheetResult, 'tree' | 'sheet' | 'headers
   ];
 
   const countColumns = columns.flatMap((c, i) => (isCountColumn(c) ? [levelWidth + i] : []));
+  const hourColumns = columns.flatMap((c, i) => (TIME_TRACKING_FIELDS.has(c) ? [levelWidth + i] : []));
 
   const rows: TableRow[] = [];
   const merges: SheetTable['merges'] = [];
@@ -164,7 +168,7 @@ export function groupTable(r: Pick<GroupSheetResult, 'tree' | 'sheet' | 'headers
       : range(0, levels).flatMap((i): TableCell[] => [i === 0 ? TOTAL_ROW_LABEL : '', tree.total]);
     rows.push({ kind: 'total', cells: [...levelCells, ...countCells(tree), ...tail(tree)], worklogIds: [] });
   }
-  return { header, rows, amountColumns, dateColumns: [], countColumns, merges };
+  return { header, rows, amountColumns, dateColumns: [], countColumns, hourColumns, merges };
 }
 
 /**
@@ -174,6 +178,7 @@ export function groupTable(r: Pick<GroupSheetResult, 'tree' | 'sheet' | 'headers
 export function flatTable(r: Pick<FlatSheetResult, 'columns' | 'rows' | 'headers' | 'showTotals'>): SheetTable {
   const amountColumns = r.columns.flatMap((c, i) => (c === HOURS_FIELD ? [i] : []));
   const dateColumns = r.columns.flatMap((c, i) => (DATE_FIELDS.has(c) ? [i] : []));
+  const hourColumns = r.columns.flatMap((c, i) => (TIME_TRACKING_FIELDS.has(c) ? [i] : []));
   const rows: TableRow[] = r.rows.map((row) => ({ kind: 'data', cells: row.cells, worklogIds: row.worklogIds }));
   if (r.showTotals) {
     const total = r.rows.reduce((sum, row) => sum + row.seconds, 0);
@@ -184,7 +189,7 @@ export function flatTable(r: Pick<FlatSheetResult, 'columns' | 'rows' | 'headers
       worklogIds: [],
     });
   }
-  return { header: r.headers.columns, rows, amountColumns, dateColumns, countColumns: [], merges: [] };
+  return { header: r.headers.columns, rows, amountColumns, dateColumns, countColumns: [], hourColumns, merges: [] };
 }
 
 export const sheetTable = (r: SheetResult): SheetTable => (r.mode === 'group' ? groupTable(r) : flatTable(r));

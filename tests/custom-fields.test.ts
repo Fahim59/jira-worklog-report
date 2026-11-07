@@ -10,6 +10,8 @@ import {
   normalizeFieldValue,
   PSEUDO_FIELDS,
   schemaTypeOf,
+  secondsToHoursText,
+  TIME_TRACKING_FIELDS,
   type JiraFieldRaw,
 } from '../src/services/custom/fields.js';
 
@@ -195,5 +197,24 @@ describe('GET /api/fields', () => {
     const res = await a.inject({ url: '/api/fields' });
     expect(res.statusCode).toBe(401);
     expect(res.json().error).toMatch(/^Could not load fields\. Jira did not accept your email and API token/);
+  });
+});
+
+describe('secondsToHoursText', () => {
+  it('converts whole seconds exactly enough to sum without drift', () => {
+    expect(secondsToHoursText(3600)).toBe('1');
+    expect(secondsToHoursText(59400)).toBe('16.5');
+    expect(secondsToHoursText(1)).toBe('0.000278');
+    // 100 issues of 20 min: summing the shown values stays within a second of the true 33.333.. h
+    const sum = Array.from({ length: 100 }, () => Number(secondsToHoursText(1200))).reduce((a, b) => a + b, 0);
+    expect(Math.abs(sum - 100 / 3)).toBeLessThan(1 / 3600);
+  });
+  it('gives "" for anything that is not a non-negative number', () => {
+    for (const v of [null, undefined, '3600', NaN, Infinity, -60, {}]) expect(secondsToHoursText(v)).toBe('');
+  });
+  it('lists exactly the six time-tracking fields', () => {
+    expect([...TIME_TRACKING_FIELDS].sort()).toEqual(
+      ['aggregatetimeestimate', 'aggregatetimeoriginalestimate', 'aggregatetimespent', 'timeestimate', 'timeoriginalestimate', 'timespent'],
+    );
   });
 });
